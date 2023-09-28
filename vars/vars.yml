@@ -1,0 +1,23 @@
+---
+ # 17945   # 423 # 17951 
+fqdn: 
+sectigo_orgId: ""
+sectigo_cert_term: 365
+sectigo_cert_profile_id: ""
+external: ""
+issuer: ""
+issuer_mail: "" 
+encryption: ""
+autorenew: ""
+sectigo_username: ""
+sectigo_password: ""
+allow_world_readable_tmpfiles: true
+coutry_code: ""
+organization_name: ""
+customer_uri: ""
+
+mail_server_ip: ""
+mail_server_port:
+mail_sender: ""
+issuer_name: ""
+issuer_mail: ""

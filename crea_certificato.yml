@@ -1,0 +1,154 @@
+- name: Create Certificate and send to Email
+  hosts: localhost
+  connection: local
+  
+  vars_files:
+    - vars/vars.yml
+    
+  tasks:
+    - name: Generate PrivateKey
+      openssl_privatekey:
+        path: "/tmp/{{ fqdn |  replace('.','_') }}.key"
+        size: "{{ encryption }}"
+        cipher: aes256
+        passphrase: "password"
+      tags:
+        - sslstandard
+
+        
+    - name: Remove password from PrivateKey
+      ansible.builtin.shell: openssl rsa -in /tmp/{{ fqdn |  replace('.','_') }}.key -out /tmp/{{ fqdn |  replace('.','_') }}.key -passin pass:password        
+
+    - name: Generating CSR 
+      openssl_csr:
+        path: "/tmp/{{ fqdn | replace('.','_') }}.csr"
+        privatekey_path: "/tmp/{{ fqdn | replace('.','_') }}.key"
+        common_name: "{{ fqdn }}"
+        organization_name: "{{ organization_name }}"
+        country_name: "{{ country_code }}"
+      tags:
+        - sslstandard
+
+    - name: Find CSR from File
+      command: "cat /tmp/{{ fqdn | replace('.','_') }}.csr"
+      register: csrfromfile
+      tags:
+        - sslstandard
+
+    - name: Delete newline in CSR
+      debug:
+        msg: "{{ csrfromfile.stdout | replace('\n', '' )}}"
+      register: csrwithoutnewline
+      tags:
+        - sslstandard
+
+    - name: Submit Certificate request to Sectigo
+      uri:
+        url: https://cert-manager.com/api/ssl/v1/enroll
+        method: POST
+        body_format: json
+        body: 
+          orgId: "{{ sectigo_orgId }}"
+          csr: "{{csrfromfile.stdout | replace('\n', '' )}}"
+          commonName: "{{ fqdn }}"
+          subjAltNames: "www.{{ fqdn }}"
+          term: "{{ sectigo_cert_term }}"
+          certType: "{{ sectigo_cert_profile_id }}"
+          externalRequester: "{{ external }}"
+          comments: "{{ issuer }} {{ issuer_mail }}"
+          #keySize: "{{ encryption }}"
+          #algorithm: "RSA"
+          #passPhrase: "password"
+        force_basic_auth: yes 
+        status_code: 200
+        headers:
+          Content-Type: application/json
+          customerUri: "{{ customer_uri }}"
+          login: "{{ sectigo_username }}"
+          password: "{{ sectigo_password }}"
+      register: certresult
+      tags:
+        - sslstandard
+
+ 
+    - name: get certid
+      debug:
+        msg: "{{ certresult.json.sslId }}"
+      tags:
+        - sslstandard
+
+
+    - name: Waiting for certificate approval
+      uri:
+        url: "https://cert-manager.com/api/ssl/v1/{{ certresult.json.sslId }}"
+        method: GET
+        body_format: json
+        return_content: yes
+        status_code: 200
+        headers:
+          Content-Type: application/json
+          customerUri: "{{ customer_uri }}"
+          login: "{{ sectigo_username }}"
+          password: "{{ sectigo_password }}"
+      register: pendingstatus
+      until: pendingstatus.json.status == "Issued"
+      retries: 50
+      delay: 30
+      tags:
+        - sslstandard
+        
+        
+    - name: Creating tmp folder
+      ansible.builtin.file:
+        path: /tmp/download
+        state: directory
+        mode: '0755'     
+        
+    - name: Creating tmp folder 2
+      ansible.builtin.file:
+        path: /tmp/mount
+        state: directory
+        mode: '0755'         
+
+    - name: Download CA Certificate
+      uri:
+        url: "https://cert-manager.com/api/ssl/v1/collect/{{ certresult.json.sslId }}/x509CO"
+        dest: "/tmp/download/{{ fqdn | replace('.','_') }}_cert.crt"
+        method: GET
+        headers:
+          Content-Type: application/json
+          customerUri: "{{ customer_uri }}"
+          login: "{{ sectigo_username }}"
+          password: "{{ sectigo_password }}"
+      register: download_status 
+      tags:
+        - sslstandard
+        
+    - name: Download Interm Certificate
+      uri:
+        url: "https://cert-manager.com/api/ssl/v1/collect/{{ certresult.json.sslId }}/x509IO"
+        dest: "/tmp/download/{{ fqdn | replace('.','_') }}_interm.crt"
+        method: GET
+        headers:
+          Content-Type: application/json
+          customerUri: "{{ customer_uri }}"
+          login: "{{ sectigo_username }}"
+          password: "{{ sectigo_password }}"
+      register: download_status 
+      tags:
+        - sslstandard   
+    
+                
+             
+
+    - name: Send Certificate files via Email
+      community.general.mail:
+        host: "{{ mail_server_ip }}"
+        port: {{ mail_server_port }}
+        from: {{ mail_sender }}
+        to: "{{ issuer_name }} <{{ issuer_mail }}>"
+        subject: {{ organization_name }} Sectigo - Certificate for {{ fqdn }} issued
+        body: The certificate for the url {{ fqdn }} is now ready.
+        attach: ["/tmp/download/{{ fqdn | replace('.','_') }}_cert.crt", "/tmp/download/{{ fqdn | replace('.','_') }}_interm.crt", "/tmp/{{ fqdn |  replace('.','_') }}.key"]
+           
+           
